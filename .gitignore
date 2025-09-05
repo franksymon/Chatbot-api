@@ -1,0 +1,29 @@
+# Archivos y carpetas comunes a ignorar en proyectos Node.js y Python
+node_modules/
+.env
+*.pyc
+__pycache__/
+.DS_Store
+*.log
+.idea/
+.vscode/
+*.sqlite3
+*.db
+# Ignorar archivos de sistema
+Thumbs.db
+# Ignorar archivos de dependencias
+package-lock.json
+pip-log.txt
+# Ignorar archivos de pruebas y cobertura
+coverage/
+*.cover
+*.coverage
+# Ignorar archivos de salida
+/dist/
+/build/
+# Ignorar archivos temporales
+*.swp
+*.swo
+*.tmp
+*.bak
+.venv

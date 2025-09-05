@@ -2,7 +2,6 @@ from flask import Flask
 from flasgger import Swagger
 from flask_marshmallow import Marshmallow
 from app.config.swagger import swagger_template
-from app.config.config import Config
 
 prefix = "/api/v1"
 

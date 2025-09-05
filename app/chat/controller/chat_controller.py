@@ -25,6 +25,14 @@ def chat():
 					message:
 						type: string
 						example: "Hola, ¿cómo estás?"
+					session_id:
+						type: string
+						example: "user_123"
+						description: "ID de sesión para mantener contexto"
+					prompt_type:
+						type: string
+						example: "general"
+						description: "Tipo de consulta: general, case_analysis, documentation, resources"
 		-	in: query
 			name: provider
 			required: true
@@ -75,3 +83,57 @@ def test():
 					example: "Bad Request"
 		"""
 	return chat_services.test_connection(request.args)
+
+@chat_controller.route("/history/<session_id>", methods=["GET"])
+def get_history(session_id):
+	"""
+	Obtener historial de conversación
+	---
+	tags:
+		- Chatbot
+	summary: Obtener historial de una sesión
+	produces:
+		- application/json
+	parameters:
+		-	in: path
+			name: session_id
+			required: true
+			type: string
+			example: "user_123"
+	responses:
+		200:
+			description: Historial obtenido
+			schema:
+				type: object
+				properties:
+					messages:
+						type: array
+						items:
+							type: object
+		400:
+			description: Error
+	"""
+	return chat_services.get_history(session_id)
+
+@chat_controller.route("/prompt-types", methods=["GET"])
+def get_prompt_types():
+	"""
+	Obtener tipos de prompt disponibles
+	---
+	tags:
+		- Chatbot
+	summary: Obtener tipos de consulta disponibles
+	produces:
+		- application/json
+	responses:
+		200:
+			description: Tipos de prompt disponibles
+			schema:
+				type: object
+				properties:
+					prompt_types:
+						type: object
+					default:
+						type: string
+	"""
+	return chat_services.get_prompt_types()

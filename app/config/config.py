@@ -24,7 +24,11 @@ class Config(metaclass=Singleton):
     def __init__(self) -> None:
         super().__init__()
 
-        self.langchain_tracing = os.getenv("LANGCHAIN_TRACING")
+        # Deshabilitar LangSmith tracing
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        os.environ["LANGSMITH_TRACING"] = "false"
+
+      
         self.temperature = float(os.getenv("TEMPERATURE", "0.7"))
 
         # OpenAI

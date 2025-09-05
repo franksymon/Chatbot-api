@@ -1,8 +1,9 @@
-Flask==3.1.2
-flasgger==0.9.7.
-setuptools==80.9.0
-flask-marshmallow==1.3.0
+Flask
+flasgger
+setuptools
+flask-marshmallow
 langgraph
 langchain-openai
 langchain-core
 langchain-google-genai
+marshmallow

@@ -1,5 +1,5 @@
 from flask import jsonify, Request, Response
-from langchain_core.messages import HumanMessage, trim_messages
+from langchain_core.messages import HumanMessage, trim_messages, AIMessage
 from langgraph.graph import StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
 import json
@@ -67,7 +67,6 @@ class ChatServices:
         # Trim messages
         trimmed_messages = self._trim_messages_if_needed(state["messages"], state["provider"])
 
-        # Aplicar el prompt template a los mensajes recortados
         formatted_messages = prompt_template.format_messages(messages=trimmed_messages)
         response = chat_model.invoke(formatted_messages)
         return {"messages": [response]}
@@ -83,19 +82,26 @@ class ChatServices:
         chat_model = self.llm_config.get_chat_model(state["provider"])
         prompt_template = PromptManager.get_prompt(state["prompt_type"])
 
-        trimmed_messages = self._trim_messages_if_needed(state["messages"], state["provider"])
+        try:
+            current_state = self.app.get_state(config)
+            existing_messages = current_state.values.get("messages", [])
+            all_messages = existing_messages + state["messages"]
+        except Exception:
+            all_messages = state["messages"]
+
+        trimmed_messages = self._trim_messages_if_needed(all_messages, state["provider"])
         formatted_messages = prompt_template.format_messages(messages=trimmed_messages)
 
         accumulated_content = ""
         for chunk in chat_model.stream(formatted_messages):
             if hasattr(chunk, 'content') and chunk.content:
-                accumulated_content += chunk.content  
-                yield accumulated_content  
+                accumulated_content += chunk.content
+                yield accumulated_content
+
         try:
-            full_response = chat_model.invoke(formatted_messages)
-            self.app.update_state(config, {"messages": [full_response]})
+            self.app.update_state(config, {"messages": [AIMessage(content=accumulated_content)]})
         except Exception as e:
-            print(f"Warning: Could not save complete message to state: {e}")
+            print(f"Warning: Could not save AI message to state: {e}")
 
     def _stream_response(self, state: dict, config: dict):
         """
@@ -146,15 +152,20 @@ class ChatServices:
         stream = query_params.get("stream", "false").lower() == "true"
 
         config = {"configurable": {"thread_id": session_id}}
+        user_message = HumanMessage(content=data["message"])
 
         state = {
-            "messages": [HumanMessage(content=data["message"])],
+            "messages": [user_message],
             "provider": query_params.get("provider"),
             "session_id": session_id,
             "prompt_type": prompt_type
         }
 
         if stream:
+            try:
+                self.app.update_state(config, {"messages": [user_message]})
+            except Exception as e:
+                print(f"Warning: Could not save user message: {e}")
             return self._stream_response(state, config)
         else:
             result = self.app.invoke(state, config)

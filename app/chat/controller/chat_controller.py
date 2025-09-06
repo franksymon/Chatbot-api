@@ -12,9 +12,10 @@ def chat():
 	---
 	tags:
 		- Chatbot
-	summary: Enviar mensaje al chatbot
+	summary: Enviar mensaje al chatbot (soporta streaming)
 	produces:
 		- application/json
+		- text/event-stream
 	parameters:
 		-	in: body
 			name: body
@@ -39,9 +40,16 @@ def chat():
 			type: string
 			enum: ["openai", "gemini"]
 			example: "openai"
+		-	in: query
+			name: stream
+			required: false
+			type: string
+			enum: ["true", "false"]
+			example: "false"
+			description: "Habilitar streaming con Server-Sent Events"
 	responses:
 		200:
-			description: Respuesta exitosa
+			description: Respuesta exitosa (JSON normal o SSE stream)
 			schema:
 				type: string
 				example: "Okay"

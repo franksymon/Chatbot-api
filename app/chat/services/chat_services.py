@@ -1,22 +1,17 @@
-from flask import jsonify, Request, send_file
+from flask import jsonify, Request, Response
 from langchain_core.messages import HumanMessage, trim_messages
 from langgraph.graph import StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
-from datetime import datetime
-from reportlab.lib.pagesizes import letter, A4
-from reportlab.pdfgen import canvas
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.units import inch
-from reportlab.lib import colors
-import io
-import os
+import json
 
 # Schema
 from app.chat.schemas.chat_schema import ChatSchema
 
 # Models
 from app.chat.models.chat_models import ChatState
+
+# Services
+from app.chat.services.pdf_service import PDFService
 
 # Prompts
 from app.chat.prompts.prompt_manager import PromptManager
@@ -28,6 +23,7 @@ class ChatServices:
     def __init__(self, request: Request):
         self.request = request
         self.llm_config = LLMConfig()
+        self.pdf_service = PDFService()
         self.app = self._create_graph()
 
     def _create_graph(self):
@@ -68,7 +64,7 @@ class ChatServices:
         chat_model = self.llm_config.get_chat_model(state["provider"])
         prompt_template = PromptManager.get_prompt(state["prompt_type"])
 
-        # Trim messages si es necesario
+        # Trim messages
         trimmed_messages = self._trim_messages_if_needed(state["messages"], state["provider"])
 
         # Aplicar el prompt template a los mensajes recortados
@@ -76,12 +72,69 @@ class ChatServices:
         response = chat_model.invoke(formatted_messages)
         return {"messages": [response]}
 
+    def _stream_model_response(self, state: dict, config: dict):
+        """
+        Genera streaming de respuesta del modelo LLM.
+
+        :param state: Estado actual de la conversación
+        :param config: Configuración de la sesión
+        :return: Generador de chunks de texto
+        """
+        chat_model = self.llm_config.get_chat_model(state["provider"])
+        prompt_template = PromptManager.get_prompt(state["prompt_type"])
+
+        trimmed_messages = self._trim_messages_if_needed(state["messages"], state["provider"])
+        formatted_messages = prompt_template.format_messages(messages=trimmed_messages)
+
+        accumulated_content = ""
+        for chunk in chat_model.stream(formatted_messages):
+            if hasattr(chunk, 'content') and chunk.content:
+                accumulated_content += chunk.content  
+                yield accumulated_content  
+        try:
+            full_response = chat_model.invoke(formatted_messages)
+            self.app.update_state(config, {"messages": [full_response]})
+        except Exception as e:
+            print(f"Warning: Could not save complete message to state: {e}")
+
+    def _stream_response(self, state: dict, config: dict):
+        """
+        Genera respuesta streaming usando Server-Sent Events (SSE).
+        :param state: Estado inicial para LangGraph
+        :param config: Configuración de la sesión
+        :return: Response con streaming SSE
+        """
+        def generate():
+            try:
+                yield f"data: {json.dumps({'type': 'start'})}\n\n"
+
+                for chunk in self._stream_model_response(state, config):
+                    if chunk:
+                        yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+        return Response(
+            generate(),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Cache-Control'
+            }
+        )
+
     def chat(self, data: ChatSchema, query_params: dict):
         """
         Servicio para enviar mensajes al chatbot.
+        Soporta tanto respuestas normales como streaming según el parámetro 'stream'.
         :param data: Datos de la petición in body
         :param query_params: Parámetros de la petición in query
-        :return: Respuesta del chatbot
+        :return: Respuesta del chatbot (JSON normal o SSE stream)
         """
 
         if not query_params.get("provider"):
@@ -90,6 +143,7 @@ class ChatServices:
         data = ChatSchema().load(data)
         session_id = data.get("session_id", "default")
         prompt_type = data.get("prompt_type", "general")
+        stream = query_params.get("stream", "false").lower() == "true"
 
         config = {"configurable": {"thread_id": session_id}}
 
@@ -100,9 +154,12 @@ class ChatServices:
             "prompt_type": prompt_type
         }
 
-        result = self.app.invoke(state, config)
-        response = result["messages"][-1].content.replace("\n", "").strip()
-        return jsonify({"response": response})
+        if stream:
+            return self._stream_response(state, config)
+        else:
+            result = self.app.invoke(state, config)
+            response = result["messages"][-1].content.replace("\n", "").strip()
+            return jsonify({"response": response})
 
     def get_history(self, session_id: str):
         """
@@ -125,129 +182,17 @@ class ChatServices:
             return jsonify({"error": str(e)}), 500
 
     def export_history_pdf(self, session_id: str):
-        """
-        Exporta historial como PDF profesional
-
-        :param session_id: ID de la sesión
-        :return: Archivo PDF
-        """
+        """Exporta historial como PDF profesional"""
         try:
             config = {"configurable": {"thread_id": session_id}}
             state = self.app.get_state(config)
             messages = state.values.get("messages", [])
 
-            # Crear PDF en memoria
-            buffer = io.BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=letter)
-            styles = getSampleStyleSheet()
-            story = []
-
-            # Título del informe
-            title_style = ParagraphStyle(
-                'CustomTitle',
-                parent=styles['Heading1'],
-                fontSize=18,
-                spaceAfter=30,
-                alignment=1,  # Centrado
-                textColor=colors.darkblue
-            )
-            story.append(Paragraph("INFORME CLÍNICO PSICOLÓGICO", title_style))
-            story.append(Spacer(1, 20))
-
-            # Datos de la sesión
-            session_data = [
-                ["ID Sesión:", session_id],
-                ["Fecha:", datetime.now().strftime('%Y-%m-%d %H:%M')],
-                ["Psicólogo:", "Sistema de Apoyo Clínico"],
-                ["Número de intercambios:", str(len(messages))]
-            ]
-
-            session_table = Table(session_data, colWidths=[2*inch, 3*inch])
-            session_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
-                ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 0), (-1, -1), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
-            story.append(session_table)
-            story.append(Spacer(1, 20))
-
-            # Resumen ejecutivo
-            if messages:
-                story.append(Paragraph("RESUMEN EJECUTIVO", styles['Heading2']))
-                summary = self.generate_session_summary(messages)
-                story.append(Paragraph(summary, styles['Normal']))
-                story.append(Spacer(1, 20))
-
-            # Desarrollo de la sesión
-            story.append(Paragraph("DESARROLLO DE LA SESIÓN", styles['Heading2']))
-            story.append(Spacer(1, 12))
-
-            for i, msg in enumerate(messages, 1):
-                msg_type = "PSICÓLOGO" if msg.__class__.__name__ == "HumanMessage" else "ASISTENTE CLÍNICO"
-
-                # Estilo para el tipo de mensaje
-                msg_style = ParagraphStyle(
-                    'MessageType',
-                    parent=styles['Normal'],
-                    fontSize=10,
-                    textColor=colors.darkblue if msg_type == "PSICÓLOGO" else colors.darkgreen,
-                    fontName='Helvetica-Bold'
-                )
-
-                story.append(Paragraph(f"{i}. {msg_type}:", msg_style))
-                story.append(Paragraph(msg.content, styles['Normal']))
-                story.append(Spacer(1, 12))
-
-            # Generar PDF
-            doc.build(story)
-            buffer.seek(0)
-
-            return send_file(
-                buffer,
-                as_attachment=True,
-                download_name=f"informe_clinico_{session_id}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                mimetype='application/pdf'
-            )
+            buffer = self.pdf_service.generate_clinical_report(session_id, messages, self.llm_config)
+            return self.pdf_service.create_download_response(buffer, session_id)
 
         except Exception as e:
             return jsonify({"error": str(e)}), 500
-
-    def generate_session_summary(self, messages):
-        """
-        Genera un resumen automático de la sesión usando IA
-        """
-        try:
-            if not messages:
-                return "No hay mensajes en esta sesión."
-
-            # Crear prompt para resumen
-            summary_prompt = """Basándote en esta conversación clínica, genera un resumen profesional de máximo 200 palabras que incluya:
-            1. Principales temas tratados
-            2. Síntomas o situaciones identificadas
-            3. Técnicas o recomendaciones sugeridas
-            4. Observaciones relevantes
-
-            Conversación:
-            """
-
-            # Agregar mensajes al prompt
-            for msg in messages[-10:]:  # Solo últimos 10 mensajes para el resumen
-                msg_type = "Psicólogo" if msg.__class__.__name__ == "HumanMessage" else "Asistente"
-                summary_prompt += f"\n{msg_type}: {msg.content}"
-
-            # Usar el LLM para generar resumen
-            chat_model = self.llm_config.get_chat_model("openai")  # Usar OpenAI por defecto
-            summary_msg = HumanMessage(content=summary_prompt)
-            response = chat_model.invoke([summary_msg])
-
-            return response.content
-
-        except Exception as e:
-            return f"No se pudo generar resumen automático: {str(e)}"
 
     def get_prompt_types(self):
         """Obtiene los tipos de prompt disponibles"""

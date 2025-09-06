@@ -137,3 +137,37 @@ def get_prompt_types():
 						type: string
 	"""
 	return chat_services.get_prompt_types()
+
+@chat_controller.route("/export-pdf/<session_id>", methods=["GET"])
+def export_history_pdf(session_id):
+	"""
+	Exportar historial como PDF profesional
+	---
+	tags:
+		- Chatbot
+	summary: Exportar historial de sesión como informe PDF
+	produces:
+		- application/pdf
+	parameters:
+		-	in: path
+			name: session_id
+			required: true
+			type: string
+			example: "user_123"
+	responses:
+		200:
+			description: PDF generado y descargado
+			content:
+				application/pdf:
+					schema:
+						type: string
+						format: binary
+		400:
+			description: Error
+			schema:
+				type: object
+				properties:
+					error:
+						type: string
+	"""
+	return chat_services.export_history_pdf(session_id)

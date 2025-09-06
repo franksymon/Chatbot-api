@@ -1,6 +1,7 @@
 from flask import Flask
 from flasgger import Swagger
 from flask_marshmallow import Marshmallow
+from flask_cors import CORS
 from app.config.swagger import swagger_template
 
 prefix = "/api/v1"
@@ -16,6 +17,7 @@ def create_app():
 
 def register_extensions(app):
     
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
     Swagger(app, template=swagger_template)
     Marshmallow(app)
 
